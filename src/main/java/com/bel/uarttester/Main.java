@@ -5,19 +5,27 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 
-/** CLI entry point for UART tests, batch runs, port listing, result viewing, and CSV export. */
+/**
+ * CLI entry point for UART tests, batch runs, port listing, result viewing, and
+ * CSV export.
+ */
 public class Main {
     public static void main(String[] args) {
-        if (args.length < 1 || args.length > 3) usage();
+        if (args.length < 1 || args.length > 3)
+            usage();
 
         if ("ports".equalsIgnoreCase(args[0])) {
             SerialPort[] ports = SerialPort.getCommPorts();
-            if (ports.length == 0) System.out.println("No serial ports detected.");
-            else for (SerialPort p : ports) System.out.println(p.getSystemPortName() + " - " + p.getDescriptivePortName());
+            if (ports.length == 0)
+                System.out.println("No serial ports detected.");
+            else
+                for (SerialPort p : ports)
+                    System.out.println(p.getSystemPortName() + " - " + p.getDescriptivePortName());
             System.exit(0);
         }
         if ("export".equalsIgnoreCase(args[0])) {
-            if (args.length < 2) usage();
+            if (args.length < 2)
+                usage();
             Path csv = Paths.get(args[1]);
             Path db = Paths.get(args.length == 3 ? args[2] : "data/results.db");
             try {
@@ -31,8 +39,13 @@ public class Main {
         }
         if ("results".equalsIgnoreCase(args[0])) {
             String db = args.length >= 2 ? args[1] : "data/results.db";
-            try { ResultStore.printLastResults(db, 20); System.exit(0); }
-            catch (Exception e) { System.err.println("Error reading results: " + e.getMessage()); System.exit(2); }
+            try {
+                ResultStore.printLastResults(db, 20);
+                System.exit(0);
+            } catch (Exception e) {
+                System.err.println("Error reading results: " + e.getMessage());
+                System.exit(2);
+            }
         }
 
         boolean loopback = args.length >= 2 && "loopback".equalsIgnoreCase(args[1]);
@@ -43,8 +56,12 @@ public class Main {
 
         Path target = Paths.get(args[0]);
         if (Files.isDirectory(target)) {
-            try { System.exit(BatchRunner.run(target, loopback, ".")); }
-            catch (Exception e) { System.err.println("Batch error: " + e.getMessage()); System.exit(2); }
+            try {
+                System.exit(BatchRunner.run(target, loopback, "."));
+            } catch (Exception e) {
+                System.err.println("Batch error: " + e.getMessage());
+                System.exit(2);
+            }
         }
 
         try {
@@ -52,8 +69,10 @@ public class Main {
             System.exit(run(t, loopback, ".") ? 0 : 1);
         } catch (Exception e) {
             System.err.println("Error: " + e.getMessage());
-            try (TestLog errLog = new TestLog("logs/run.log")) { errLog.log("TESTER", "ERROR", null, e.getMessage()); }
-            catch (Exception ignored) {}
+            try (TestLog errLog = new TestLog("logs/run.log")) {
+                errLog.log("TESTER", "ERROR", null, e.getMessage());
+            } catch (Exception ignored) {
+            }
             System.exit(2);
         }
     }
@@ -75,13 +94,17 @@ public class Main {
         try (TestLog log = new TestLog(logPath); ResultStore store = new ResultStore(dbPath)) {
             log.start(t.name);
             log.log("TESTER", "INFO", null, "Template loaded: " + t.name + " from " + t.source);
-            DeviceSimulator sim = null; Thread simThread = null; TestLog deviceLog = null;
-            UartPort testPort; UartPort simPort = null;
+            DeviceSimulator sim = null;
+            Thread simThread = null;
+            TestLog deviceLog = null;
+            UartPort testPort;
+            UartPort simPort = null;
 
             if (loopback) {
                 deviceLog = new TestLog(devLogPath);
                 LoopbackUartPort[] pair = LoopbackUartPort.pair();
-                testPort = pair[0]; simPort = pair[1];
+                testPort = pair[0];
+                simPort = pair[1];
                 if (t.baudTiming) {
                     pair[0].setBaudRate(t.baud, t.dataBits, t.parity, t.stopBits);
                     pair[1].setBaudRate(t.baud, t.dataBits, t.parity, t.stopBits);
@@ -100,12 +123,15 @@ public class Main {
                 return runner.run(t);
             } finally {
                 if (sim != null) {
-                    sim.stop(); simPort.close(); simThread.join(1000);
+                    sim.stop();
+                    simPort.close();
+                    simThread.join(1000);
                     log.log("TESTER", "INFO", null, "Simulator stopped");
                 }
                 testPort.close();
                 log.log("TESTER", "INFO", null, "Port closed");
-                if (deviceLog != null) deviceLog.close();
+                if (deviceLog != null)
+                    deviceLog.close();
             }
         }
     }
