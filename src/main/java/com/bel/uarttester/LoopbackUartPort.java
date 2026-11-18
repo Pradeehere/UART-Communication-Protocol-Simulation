@@ -7,12 +7,13 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * In-memory byte transport implementing {@link UartPort} for simulation without
- * OS drivers. A pair of endpoints allows bidirectional, thread-safe communication.
+ * OS drivers. Supports optional baud-accurate transmission delays.
  */
 public class LoopbackUartPort implements UartPort {
     private final BlockingQueue<Integer> inbox;
     private final BlockingQueue<Integer> outbox;
     private volatile boolean closed = false;
+    private volatile long nanosPerByte = 0;
 
     private LoopbackUartPort(BlockingQueue<Integer> inbox, BlockingQueue<Integer> outbox) {
         this.inbox = inbox;
@@ -28,42 +29,41 @@ public class LoopbackUartPort implements UartPort {
         return new LoopbackUartPort[]{a, b};
     }
 
+    public void setBaudRate(int baud, int dataBits, String parity, int stopBits) {
+        int bits = 1 + dataBits + ("none".equalsIgnoreCase(parity) ? 0 : 1) + stopBits;
+        this.nanosPerByte = (long) ((bits * 1_000_000_000.0) / baud);
+    }
+
+    public void setNanosPerByte(long nanos) { this.nanosPerByte = nanos; }
+
     @Override
     public void write(byte[] bytes) {
-        if (closed) {
-            throw new IllegalStateException("Port is closed");
-        }
-        if (bytes == null) {
-            return;
-        }
+        if (closed) throw new IllegalStateException("Port is closed");
+        if (bytes == null) return;
         for (byte b : bytes) {
+            if (nanosPerByte > 0) {
+                long ms = nanosPerByte / 1_000_000L;
+                int ns = (int) (nanosPerByte % 1_000_000L);
+                try { Thread.sleep(ms, ns); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+            }
             outbox.offer(b & 0xFF);
         }
     }
 
     @Override
     public byte[] read(int size, int timeoutMs) {
-        if (size <= 0) {
-            return new byte[0];
-        }
+        if (size <= 0) return new byte[0];
         byte[] received = new byte[size];
         int count = 0;
         long deadline = System.currentTimeMillis() + timeoutMs;
-
         while (count < size && !closed) {
             long remaining = deadline - System.currentTimeMillis();
-            if (remaining <= 0) {
-                break;
-            }
+            if (remaining <= 0) break;
             try {
                 Integer val = inbox.poll(remaining, TimeUnit.MILLISECONDS);
-                if (val == null) {
-                    break;
-                }
-                if (val == -1) {
-                    inbox.offer(-1);
-                    break;
-                }
+                if (val == null) break;
+                if (val == -1) { inbox.offer(-1); break; }
                 received[count++] = (byte) val.intValue();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -81,8 +81,5 @@ public class LoopbackUartPort implements UartPort {
         }
     }
 
-    public boolean isClosed() {
-        return closed;
-    }
+    public boolean isClosed() { return closed; }
 }
-

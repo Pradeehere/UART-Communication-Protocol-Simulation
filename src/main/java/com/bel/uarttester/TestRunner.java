@@ -1,10 +1,11 @@
 package com.bel.uarttester;
 
 import java.util.Arrays;
+import java.util.Locale;
 
 /**
- * Executes a template by chunking send/expect bytes through a FrameBuffer,
- * transmitting fixed-size arrays over UART, verifying replies, and persisting results.
+ * Executes a UART test template by chunking byte arrays, applying framing and checksums,
+ * transmitting via UartPort, measuring round-trip latency, and verifying responses.
  */
 public class TestRunner {
     private final UartPort port;
@@ -21,7 +22,9 @@ public class TestRunner {
 
     public boolean run(Template t) {
         FrameBuffer buffer = new FrameBuffer(t.arraySize);
+        FrameCodec codec = t.codec();
         int totalArrays = t.send.length / t.arraySize;
+        int readWireSize = codec.wireSize(t.arraySize);
         int arrayNo = 1;
         boolean allPassed = true;
 
@@ -30,24 +33,52 @@ public class TestRunner {
         for (byte b : t.send) {
             if (buffer.add(b)) {
                 byte[] arrayToSend = buffer.take();
+                byte[] wireToSend = codec.encode(arrayToSend);
                 int offset = (arrayNo - 1) * t.arraySize;
                 byte[] expectedSlice = Arrays.copyOfRange(t.expect, offset, offset + t.arraySize);
+                String expectedHex = Template.toExpectHex(t.expectPattern, offset, t.arraySize);
 
-                log.log("TESTER", "SEND", arrayToSend, "Array " + arrayNo + "/" + totalArrays);
-                port.write(arrayToSend);
+                log.log("TESTER", "SEND", wireToSend, "Array " + arrayNo + "/" + totalArrays);
 
-                byte[] received = port.read(t.arraySize, t.timeoutMs);
-                log.log("TESTER", "RECEIVE", received, "Array " + arrayNo + "/" + totalArrays);
+                long startNano = System.nanoTime();
+                port.write(wireToSend);
+                byte[] rawReply = port.read(readWireSize, t.timeoutMs);
+                long endNano = System.nanoTime();
+                double latencyMs = (endNano - startNano) / 1_000_000.0;
 
-                boolean pass = received.length == t.arraySize && verifier.verify(arrayToSend, received, expectedSlice);
+                log.log("TESTER", "RECEIVE", rawReply, "Array " + arrayNo + "/" + totalArrays);
+
+                byte[] receivedPayload = null;
+                String failReason = null;
+                if (rawReply.length != readWireSize) {
+                    failReason = "expected " + expectedHex;
+                } else {
+                    try {
+                        receivedPayload = codec.decode(rawReply);
+                    } catch (FrameCodec.FrameException e) {
+                        failReason = e.getMessage();
+                    }
+                }
+
+                boolean pass = false;
+                if (failReason == null && receivedPayload != null && receivedPayload.length == t.arraySize) {
+                    if (verifier instanceof ExactMatchVerifier emv) {
+                        pass = emv.verifyPattern(receivedPayload, t.expectPattern, offset, t.arraySize);
+                    } else {
+                        pass = verifier.verify(arrayToSend, receivedPayload, expectedSlice);
+                    }
+                    if (!pass) failReason = "expected " + expectedHex;
+                }
                 if (!pass) allPassed = false;
 
-                String verdict = pass ? "PASS" : "FAIL (expected " + Template.toHex(expectedSlice) + ")";
-                log.log("TESTER", "RESULT", received, "Array " + arrayNo + ": " + verdict);
+                String lat = String.format(Locale.US, "%.2f", latencyMs);
+                String verdict = pass ? "PASS (" + lat + " ms)" : "FAIL (" + failReason + ") (" + lat + " ms)";
+                byte[] logBytes = receivedPayload != null ? receivedPayload : rawReply;
+                log.log("TESTER", "RESULT", logBytes, "Array " + arrayNo + ": " + verdict);
 
                 if (store != null) {
                     try {
-                        store.save(t.name, arrayNo, arrayToSend, received, expectedSlice, pass);
+                        store.save(t.name, arrayNo, arrayToSend, logBytes, expectedHex, latencyMs, pass);
                     } catch (Exception e) {
                         log.log("TESTER", "ERROR", null, "Failed to persist array " + arrayNo + " result: " + e.getMessage());
                     }
@@ -60,17 +91,13 @@ public class TestRunner {
     }
 
     public static Verifier verifierFor(String name) {
-        if (name == null || name.trim().isEmpty()) {
-            throw new IllegalArgumentException("Verifier name cannot be empty");
-        }
+        if (name == null || name.trim().isEmpty()) throw new IllegalArgumentException("Verifier name cannot be empty");
         String clean = name.trim();
         if ("NIBBLE_SWAP".equalsIgnoreCase(clean)) return new NibbleSwapVerifier();
         if ("EXACT_MATCH".equalsIgnoreCase(clean)) return new ExactMatchVerifier();
         try {
             Class<?> clazz = Class.forName(clean);
-            if (!Verifier.class.isAssignableFrom(clazz)) {
-                throw new IllegalArgumentException("Class " + clean + " does not implement Verifier");
-            }
+            if (!Verifier.class.isAssignableFrom(clazz)) throw new IllegalArgumentException("Class " + clean + " does not implement Verifier");
             return (Verifier) clazz.getDeclaredConstructor().newInstance();
         } catch (ClassNotFoundException e) {
             throw new IllegalArgumentException("Unknown verifier: " + clean, e);

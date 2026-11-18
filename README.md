@@ -2,123 +2,161 @@
 
 A reusable, template-driven Java framework for UART communication protocol simulation and testing. The tool loads plain-text `.properties` templates, feeds test bytes through a fixed-size `FrameBuffer`, transmits each array over UART (or in-memory loopback), verifies the reply against configured rules, logs every event with timestamps, and records test results to SQLite before processing subsequent frames.
 
+## Architecture Overview
+
+```
+                      +-------------------+
+                      |   Template (.prop)|
+                      +---------+---------+
+                                |
+             +------------------+------------------+
+             |                                     |
+   +---------v---------+                 +---------v---------+
+   |    FrameBuffer    |                 |    FrameCodec     |
+   | (multi-array split|                 | (framing/checksum)|
+   +---------+---------+                 +---------+---------+
+             |                                     |
+             +------------------+------------------+
+                                |
+                      +---------v---------+
+                      |    TestRunner     |
+                      +----+---------+----+
+                           |         |
+          +----------------+         +----------------+
+          |                                           |
++---------v---------+                       +---------v---------+
+|     UartPort      |                       |     Verifier      |
+| (Loopback/Serial) |                       | (Exact/Nibble/FQCN|
++---------+---------+                       +-------------------+
+          |
++---------v---------+
+|  DeviceSimulator  |
+|  (Rule + Faults)  |
++---------+---------+
+          |
++---------v---------+         +-------------------+
+|      TestLog      |         |    ResultStore    |
+| (console + files) |         | (SQLite + Latency)|
++-------------------+         +---------+---------+
+                                        |
+                              +---------v---------+
+                              |    CsvExporter    |
+                              | (RFC 4180 export) |
+                              +-------------------+
+```
+
+- **`Template`**: Loads, validates, and stores protocol parameters, framing rules, fault settings, and byte streams.
+- **`FrameBuffer`**: Chunks arbitrary-length payloads into fixed `arraySize` blocks for sequential transmission.
+- **`FrameCodec`**: Modulates raw payloads into framed wire packets (`frameStart`, `frameLength`, `checksum`, `frameEnd`) and decodes responses.
+- **`UartPort`**: Hardware abstraction layer implemented by `SerialUartPort` (jSerialComm) and `LoopbackUartPort` (in-memory queues with optional baud timing).
+- **`DeviceSimulator`**: Fake UART peer executing behavioral rules (`NIBBLE_SWAP`, `ECHO`, `ADD:<hex>`, `XOR:<hex>`, `FIXED:<hex>`) and configurable fault injections.
+- **`Verifier`**: Pluggable verification engine supporting `EXACT_MATCH` (with `??` wildcards), `NIBBLE_SWAP`, and custom reflection-loaded verifiers.
+- **`TestLog`**: Thread-safe structured event logger outputting timestamped trace lines to console and log files.
+- **`ResultStore` & `CsvExporter`**: Persists array exchanges with microsecond round-trip latency to SQLite with automated schema migrations and RFC 4180 CSV export.
+
+---
+
 ## Build and Test
 
 Requirements: Java 17+ and Maven.
 
 ```shell
-mvn -Dmaven.repo.local=.m2/repository clean test
-mvn -Dmaven.repo.local=.m2/repository clean package
+mvn clean test
+mvn clean package
 ```
 
 The build produces a self-contained executable shaded JAR at `target/uart-protocol-tester-1.0-SNAPSHOT.jar`.
 
-## Running Tests
+---
 
-### 1. In-Memory Loopback Simulation (Default / Driver-Free)
+## CLI Commands
 
-Runs both the tester and the simulated device in-memory without OS drivers:
-
+### 1. Single Template Execution
 ```shell
+# In-memory loopback simulation (driver-free)
 java -jar target/uart-protocol-tester-1.0-SNAPSHOT.jar templates/nibble-swap.properties loopback
-```
 
-In loopback mode, `Main` creates a thread-safe `LoopbackUartPort` pair, launches `DeviceSimulator` in the background with the template's `device` rule, transmits all array frames, verifies replies, and cleanly shuts down threads and resources.
-
-### 2. Real or Virtual Serial Port Mode
-
-Connects to hardware transceivers or OS serial ports via `jSerialComm`:
-
-```shell
-# Terminal 1: Optional fake device
-java -cp target/uart-protocol-tester-1.0-SNAPSHOT.jar com.bel.uarttester.DeviceSimulator templates/nibble-swap.properties COM6
-
-# Terminal 2: Test runner
+# Real/virtual hardware serial port
 java -jar target/uart-protocol-tester-1.0-SNAPSHOT.jar templates/nibble-swap.properties
 ```
 
-### 3. Viewing Stored Results
+### 2. Batch Directory Execution
+Executes all `*.properties` files in a folder sequentially, recording all events and results, and outputs a summary table:
+```shell
+java -jar target/uart-protocol-tester-1.0-SNAPSHOT.jar templates/ loopback
+```
 
-Displays the last 20 test results from SQLite in an aligned table:
+### 3. Serial Port Discovery
+Lists all detected serial ports and descriptions (exits 0):
+```shell
+java -jar target/uart-protocol-tester-1.0-SNAPSHOT.jar ports
+```
 
+### 4. Viewing Stored Results
+Displays recent test runs with round-trip latency and dynamic min/avg/max statistics:
 ```shell
 java -jar target/uart-protocol-tester-1.0-SNAPSHOT.jar results
-# Or specify custom database path:
+# Or specify database path:
 java -jar target/uart-protocol-tester-1.0-SNAPSHOT.jar results data/results.db
 ```
 
+### 5. CSV Export
+Exports SQLite records to RFC 4180-compliant CSV with header and proper escaping:
+```shell
+java -jar target/uart-protocol-tester-1.0-SNAPSHOT.jar export target/report.csv
+# Or specify database path:
+java -jar target/uart-protocol-tester-1.0-SNAPSHOT.jar export target/report.csv data/results.db
+```
+
+---
+
 ## Exit Codes
 
-- `0`: All array frames completed and passed verification (or `results` command succeeded).
+- `0`: All array frames completed and passed verification (or `ports`, `results`, `export` succeeded).
 - `1`: Test completed, but at least one array frame failed verification or timed out.
-- `2`: CLI syntax error, invalid template configuration, port open failure, or fatal runtime error.
+- `2`: CLI syntax error, invalid template configuration, empty template folder, port open failure, or fatal runtime error.
+
+---
 
 ## Template Key Reference
 
-Templates are `.properties` files (read as UTF-8) configuring protocol parameters:
+Templates are standard UTF-8 `.properties` files:
 
 | Key | Required | Default | Description |
 |:---|:---|:---|:---|
-| `name` | No | File basename | Test scenario identifier used in logs and database records |
+| `name` | No | File basename | Test scenario identifier |
 | `port` | Yes | - | System serial port name (e.g., `COM5`, `/dev/ttyUSB0`) |
-| `baud` | Yes | - | Positive integer baud rate (e.g., `9600`, `115200`) |
+| `baud` | Yes | - | Baud rate (positive integer, e.g., `9600`, `115200`) |
 | `dataBits` | Yes | - | Number of data bits: `5`, `6`, `7`, or `8` |
 | `parity` | Yes | - | Parity mode: `none`, `even`, or `odd` (case-insensitive) |
 | `stopBits` | Yes | - | Number of stop bits: `1` or `2` |
-| `arraySize`| No | `8` | Fixed array size in bytes (`> 0`) |
+| `arraySize`| No | `8` | Payload chunk size in bytes (`> 0`) |
 | `send` | Yes | - | Space-separated hex bytes to transmit (`00`–`FF`) |
-| `expect` | Yes | - | Space-separated hex bytes expected in reply (`00`–`FF`) |
+| `expect` | Yes | - | Space-separated hex bytes or `??` wildcards expected in reply |
 | `verify` | Yes | - | Verifier rule: `NIBBLE_SWAP`, `EXACT_MATCH`, or custom FQCN |
-| `device` | No | `NIBBLE_SWAP`| Simulation behavior: `NIBBLE_SWAP`, `ECHO`, `ADD:<hex>`, `XOR:<hex>`, `FIXED:<hex bytes>` |
+| `device` | No | `NIBBLE_SWAP`| Simulation behavior: `NIBBLE_SWAP`, `ECHO`, `ADD:<hex>`, `XOR:<hex>`, `FIXED:<hex bytes>`, `SILENT` |
 | `timeoutMs`| Yes | - | Response deadline per array frame in milliseconds (`> 0`) |
+| `frameStart`| No | None | Optional frame start hex byte (e.g., `AA`) |
+| `frameLength`| No | `false` | When `true`, includes 1-byte payload length in frame |
+| `checksum` | No | `NONE` | Frame checksum: `NONE`, `XOR`, `SUM` (modulo 256), or `CRC8` (polynomial 0x07) |
+| `frameEnd` | No | None | Optional frame end hex byte (e.g., `55`) |
+| `faultDelayMs`| No | `0` | Simulator response delay in milliseconds |
+| `faultDrop`| No | `false` | When `true`, simulator receives and logs frame but drops reply |
+| `faultCorrupt`| No | `NONE` | Injects bit flip: `NONE` or `FLIP_BIT:<byteIndex>` (e.g., `FLIP_BIT:1`) |
+| `faultPartialBytes`| No | `0` | If `> 0`, simulator transmits only the first `N` bytes of reply |
+| `baudTiming`| No | `false` | When `true`, loopback simulates physical UART per-byte bit transmission delays |
 
-> **Frame Length Rule:** Both `send` and `expect` must contain equal counts of bytes that are exact positive multiples of `arraySize` (e.g., `arraySize=4` with 12 bytes processes 3 sequential arrays).
+---
 
-## Adding Custom Verifiers
+## SQLite Storage Schema
 
-1. Create a class implementing `com.bel.uarttester.Verifier` with a public no-argument constructor:
-   ```java
-   package com.example;
-   import com.bel.uarttester.Verifier;
-
-   public class CustomChecksumVerifier implements Verifier {
-       @Override
-       public boolean verify(byte[] sent, byte[] received, byte[] expected) {
-           return java.util.Arrays.equals(received, expected);
-       }
-   }
-   ```
-2. Reference the fully-qualified class name directly in the template:
-   ```properties
-   verify=com.example.CustomChecksumVerifier
-   ```
-   `TestRunner` instantiates the class dynamically via reflection without modifying core engine code.
-
-## Standard Log Format
-
-Logs are mirrored to the console and to `logs/run.log` (tester) and `logs/device.log` (device):
-
-```text
-RUN START <template-name>
-timestamp | SOURCE | EVENT | hex bytes | detail
-```
-
-- **`SOURCE`**: `TESTER` or `DEVICE`
-- **`EVENT`**: `INFO`, `SEND`, `RECEIVE`, `RESULT`, `ERROR`
-- Aligned columns; trailing detail column is omitted when empty.
-
-## Storage Schema
-
-Results are persisted in SQLite at `data/results.db` in table `results`:
-- `id` (INTEGER PRIMARY KEY)
-- `created_at` (TEXT timestamp)
+Results are persisted in SQLite (`data/results.db`) in table `results`:
+- `id` (INTEGER PRIMARY KEY AUTOINCREMENT)
+- `created_at` (TEXT ISO-8601 timestamp)
 - `template` (TEXT scenario name)
-- `array_no` (INTEGER 1-based array index)
-- `sent` (TEXT space-separated hex bytes)
-- `received` (TEXT space-separated hex bytes)
-- `expected` (TEXT space-separated hex bytes)
+- `array_no` (INTEGER 1-based array sequence index)
+- `sent` (TEXT space-separated hex bytes transmitted)
+- `received` (TEXT space-separated hex bytes received)
+- `expected` (TEXT space-separated hex bytes or wildcards expected)
+- `latency_ms` (REAL round-trip time in milliseconds)
 - `verdict` (TEXT `PASS` or `FAIL`)
-
-## In-Memory Simulation vs Hardware UART
-
-`LoopbackUartPort` provides an application-level, thread-safe byte queue simulation. It accurately verifies frame chunking, byte values, ordering, verifier algorithms, timeouts, and storage. However, it does not physically model electrical signaling, clock skew/jitter, line noise, framing errors, or hardware parity bits. For physical line validation, run against physical serial hardware via `SerialUartPort`.

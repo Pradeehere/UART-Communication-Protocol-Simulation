@@ -3,14 +3,19 @@ package com.bel.uarttester;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.Properties;
 
-/** Fake UART device responding to incoming byte frames according to a Template rule. */
+/** Fake UART device responding to incoming byte frames according to template rules and faults. */
 public class DeviceSimulator implements Runnable {
     private final UartPort port;
     private final int arraySize;
     private final TestLog log;
     private final String deviceRule;
+    private final FrameCodec codec;
+    private final int faultDelayMs, faultPartialBytes;
+    private final boolean faultDrop;
+    private final String faultCorrupt;
     private volatile boolean running = true;
 
     public DeviceSimulator(UartPort port, int arraySize, TestLog log) {
@@ -18,26 +23,71 @@ public class DeviceSimulator implements Runnable {
     }
 
     public DeviceSimulator(UartPort port, int arraySize, TestLog log, String rule) {
+        this(port, arraySize, log, rule, new FrameCodec(), 0, false, "NONE", 0);
+    }
+
+    public DeviceSimulator(UartPort port, Template t, TestLog log) {
+        this(port, t.arraySize, log, t.device, t.codec(), t.faultDelayMs, t.faultDrop, t.faultCorrupt, t.faultPartialBytes);
+    }
+
+    public DeviceSimulator(UartPort port, int arraySize, TestLog log, String rule, FrameCodec codec,
+                           int faultDelayMs, boolean faultDrop, String faultCorrupt, int faultPartialBytes) {
         this.port = port;
         this.arraySize = arraySize;
         this.log = log;
         this.deviceRule = rule != null ? rule : "NIBBLE_SWAP";
+        this.codec = codec != null ? codec : new FrameCodec();
+        this.faultDelayMs = faultDelayMs;
+        this.faultDrop = faultDrop;
+        this.faultCorrupt = faultCorrupt;
+        this.faultPartialBytes = faultPartialBytes;
     }
 
     @Override
     public void run() {
+        int wireSize = codec.wireSize(arraySize);
         while (running) {
-            byte[] request = port.read(arraySize, 500);
+            byte[] request = port.read(wireSize, 500);
             if (request.length == 0) continue;
-            if (request.length != arraySize) {
-                log.log("DEVICE", "WARN", request, "Incomplete frame discarded (" + request.length + "/" + arraySize + " bytes)");
+            if (request.length != wireSize) {
+                log.log("DEVICE", "WARN", request, "Incomplete frame discarded (" + request.length + "/" + wireSize + " bytes)");
                 continue;
             }
             log.log("DEVICE", "RECEIVE", request, null);
+            if (faultDrop) {
+                log.log("DEVICE", "WARN", null, "Fault injected: drop reply");
+                continue;
+            }
             if ("SILENT".equalsIgnoreCase(deviceRule)) continue;
-            byte[] reply = respond(request, deviceRule);
-            port.write(reply);
-            log.log("DEVICE", "SEND", reply, null);
+            if (faultDelayMs > 0) {
+                log.log("DEVICE", "WARN", null, "Fault injected: delay " + faultDelayMs + " ms");
+                try { Thread.sleep(faultDelayMs); }
+                catch (InterruptedException e) { Thread.currentThread().interrupt(); break; }
+            }
+            byte[] payload;
+            try {
+                payload = codec.decode(request);
+            } catch (Exception e) {
+                log.log("DEVICE", "WARN", request, "Corrupt request: " + e.getMessage());
+                continue;
+            }
+            byte[] reply = respond(payload, deviceRule);
+            byte[] wire = codec.encode(reply);
+            if (faultCorrupt != null && faultCorrupt.startsWith("FLIP_BIT:")) {
+                try {
+                    int bitIdx = Integer.parseInt(faultCorrupt.substring(9).trim());
+                    if (bitIdx >= 0 && bitIdx < wire.length) {
+                        wire[bitIdx] ^= 0x01;
+                        log.log("DEVICE", "WARN", wire, "Fault injected: flip bit at byte " + bitIdx);
+                    }
+                } catch (NumberFormatException ignored) {}
+            }
+            if (faultPartialBytes > 0 && faultPartialBytes < wire.length) {
+                wire = Arrays.copyOf(wire, faultPartialBytes);
+                log.log("DEVICE", "WARN", wire, "Fault injected: partial send " + faultPartialBytes + " bytes");
+            }
+            port.write(wire);
+            log.log("DEVICE", "SEND", wire, null);
         }
     }
 
@@ -81,7 +131,7 @@ public class DeviceSimulator implements Runnable {
         try (TestLog log = new TestLog("logs/device.log")) {
             UartPort port = new SerialUartPort(t);
             System.out.println("Device simulator running on " + t.port + " (" + t.device + "). Press Ctrl+C to stop.");
-            new DeviceSimulator(port, t.arraySize, log, t.device).run();
+            new DeviceSimulator(port, t, log).run();
         }
     }
 }

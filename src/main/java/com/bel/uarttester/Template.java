@@ -11,9 +11,22 @@ import java.util.Set;
 /** Loads and validates a UART test definition from a .properties file. */
 public class Template {
     private static final Set<String> PARITIES = Set.of("none", "even", "odd");
-    public final String name, port, parity, verify, device, source;
+    private static final Set<String> CHECKSUMS = Set.of("NONE", "XOR", "SUM", "CRC8");
+
+    public final String name, port, parity, verify, device, source, expectDisplay;
     public final int baud, dataBits, stopBits, arraySize, timeoutMs;
     public final byte[] send, expect;
+    public final int[] expectPattern; // -1 = wildcard ??
+
+    // Framing & checksum
+    public final int frameStart, frameEnd; // -1 = none
+    public final boolean frameLength;
+    public final String checksum;
+
+    // Fault injection & timing
+    public final int faultDelayMs, faultPartialBytes;
+    public final boolean faultDrop, baudTiming;
+    public final String faultCorrupt; // NONE or FLIP_BIT:<index>
 
     public Template(Properties p) { this(p, "template"); }
 
@@ -32,12 +45,37 @@ public class Template {
         this.timeoutMs = posInt(p, "timeoutMs");
         this.device = checkDev(p.getProperty("device", "NIBBLE_SWAP").trim());
         this.send = parseHex(text(p, "send"), "send");
-        this.expect = parseHex(text(p, "expect"), "expect");
-        if (send.length != expect.length || send.length == 0 || send.length % arraySize != 0) {
+        this.expectDisplay = text(p, "expect");
+        this.expectPattern = parseExpectPattern(expectDisplay, "expect", source);
+        this.expect = expectBytes();
+        if (send.length != expectPattern.length || send.length == 0 || send.length % arraySize != 0)
             throw new IllegalArgumentException(String.format(
                     "Template \"%s\": send (%d) and expect (%d) must be equal positive multiples of arraySize (%d)",
-                    source, send.length, expect.length, arraySize));
-        }
+                    source, send.length, expectPattern.length, arraySize));
+
+        this.frameStart = optHexByte(p, "frameStart");
+        this.frameEnd = optHexByte(p, "frameEnd");
+        this.frameLength = "true".equalsIgnoreCase(p.getProperty("frameLength", "false").trim());
+        String cs = p.getProperty("checksum", "NONE").trim().toUpperCase();
+        if (!CHECKSUMS.contains(cs)) throw err("checksum", "must be one of " + CHECKSUMS, cs);
+        this.checksum = cs;
+
+        this.faultDelayMs = optNonNegInt(p, "faultDelayMs");
+        this.faultPartialBytes = optNonNegInt(p, "faultPartialBytes");
+        this.faultDrop = "true".equalsIgnoreCase(p.getProperty("faultDrop", "false").trim());
+        String fc = p.getProperty("faultCorrupt", "NONE").trim().toUpperCase();
+        if (!fc.equals("NONE") && !fc.startsWith("FLIP_BIT:")) throw err("faultCorrupt", "must be NONE or FLIP_BIT:<index>", fc);
+        this.faultCorrupt = fc;
+        this.baudTiming = "true".equalsIgnoreCase(p.getProperty("baudTiming", "false").trim());
+    }
+
+    public FrameCodec codec() { return new FrameCodec(frameStart, frameLength, checksum, frameEnd); }
+
+    public byte[] expectBytes() {
+        byte[] out = new byte[expectPattern.length];
+        for (int i = 0; i < expectPattern.length; i++)
+            out[i] = expectPattern[i] < 0 ? 0 : (byte) expectPattern[i];
+        return out;
     }
 
     public static Template load(String path) throws IOException {
@@ -52,6 +90,20 @@ public class Template {
         for (int i = 0; i < parts.length; i++) {
             if (!parts[i].matches("^[0-9a-fA-F]{1,2}$")) throw new IllegalArgumentException("Invalid hex byte: " + parts[i]);
             out[i] = (byte) Integer.parseInt(parts[i], 16);
+        }
+        return out;
+    }
+
+    static int[] parseExpectPattern(String s, String key, String source) {
+        String[] parts = s.trim().split("\\s+");
+        int[] out = new int[parts.length];
+        for (int i = 0; i < parts.length; i++) {
+            if ("??".equals(parts[i])) { out[i] = -1; continue; }
+            if (!parts[i].matches("^[0-9a-fA-F]{1,2}$"))
+                throw new IllegalArgumentException(String.format(
+                        "Template \"%s\": key \"%s\" must be valid 1-2 digit hex bytes (00-FF) or ??, got \"%s\"",
+                        source, key, s));
+            out[i] = Integer.parseInt(parts[i], 16);
         }
         return out;
     }
@@ -71,6 +123,15 @@ public class Template {
         return sb.toString();
     }
 
+    public static String toExpectHex(int[] pattern, int off, int len) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = off; i < off + len; i++) {
+            if (i > off) sb.append(' ');
+            sb.append(pattern[i] < 0 ? "??" : String.format("%02X", pattern[i]));
+        }
+        return sb.toString();
+    }
+
     private String text(Properties p, String key) {
         String val = p.getProperty(key);
         if (val == null || val.trim().isEmpty()) throw new IllegalArgumentException("Template \"" + source + "\": key \"" + key + "\" is missing");
@@ -83,6 +144,19 @@ public class Template {
             if (v <= 0) throw err(key, "must be a positive integer", String.valueOf(v));
             return v;
         } catch (NumberFormatException e) { throw err(key, "must be a positive integer", text(p, key)); }
+    }
+
+    private int optNonNegInt(Properties p, String key) {
+        String v = p.getProperty(key, "0").trim();
+        try { int n = Integer.parseInt(v); if (n < 0) throw err(key, "must be >= 0", v); return n; }
+        catch (NumberFormatException e) { throw err(key, "must be a non-negative integer", v); }
+    }
+
+    private int optHexByte(Properties p, String key) {
+        String v = p.getProperty(key, "").trim();
+        if (v.isEmpty()) return -1;
+        if (!v.matches("^[0-9a-fA-F]{1,2}$")) throw err(key, "must be a valid hex byte (00-FF)", v);
+        return Integer.parseInt(v, 16);
     }
 
     private int allowed(Properties p, String key, Set<Integer> ok) {
