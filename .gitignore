@@ -1,0 +1,6 @@
+.m2/
+target/
+logs/
+data/
+dependency-reduced-pom.xml
+
