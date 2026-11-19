@@ -30,9 +30,11 @@ public class ResultStore implements AutoCloseable {
         Path parent = Paths.get(path).getParent();
         if (parent != null) Files.createDirectories(parent);
         db = DriverManager.getConnection("jdbc:sqlite:" + path);
-        db.setAutoCommit(false);
         try (Statement s = db.createStatement()) {
             s.execute("PRAGMA journal_mode=WAL;");
+        }
+        db.setAutoCommit(false);
+        try (Statement s = db.createStatement()) {
             s.execute("CREATE TABLE IF NOT EXISTS results ("
                     + "id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT DEFAULT '', "
                     + "created_at TEXT NOT NULL, template TEXT NOT NULL, array_no INTEGER NOT NULL, "
@@ -105,17 +107,8 @@ public class ResultStore implements AutoCloseable {
         save(tpl, arr, sent, rec, exp, lat, pass, "");
     }
 
-    public void save(String tpl, int arr, byte[] sent, byte[] rec, byte[] exp, double lat, boolean pass) throws SQLException {
-        save(tpl, arr, sent, rec, Template.toHex(exp, 4096), lat, pass, "");
-    }
-
     public void save(String tpl, int arr, byte[] sent, byte[] rec, byte[] exp, boolean pass) throws SQLException {
-        save(tpl, arr, sent, rec, exp, 0.0, pass);
-    }
-
-    public void save(byte[] sent, byte[] rec, byte[] exp, boolean pass) {
-        try { save("", 1, sent, rec, exp, 0.0, pass); }
-        catch (SQLException e) { throw new IllegalStateException("Could not save result", e); }
+        save(tpl, arr, sent, rec, Template.toHex(exp, 4096), 0.0, pass, "");
     }
 
     public static void printLastResults(String path, int limit) throws SQLException {

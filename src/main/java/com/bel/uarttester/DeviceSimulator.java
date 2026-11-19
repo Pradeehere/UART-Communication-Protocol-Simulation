@@ -32,11 +32,6 @@ public class DeviceSimulator implements Runnable {
     }
 
     public DeviceSimulator(UartPort port, int arraySize, TestLog log, String rule, FrameCodec codec,
-                           int faultDelayMs, boolean faultDrop, String faultCorrupt, int faultPartialBytes) {
-        this(port, arraySize, log, rule, codec, 1000, faultDelayMs, faultDrop, faultCorrupt, faultPartialBytes);
-    }
-
-    public DeviceSimulator(UartPort port, int arraySize, TestLog log, String rule, FrameCodec codec,
                            int timeoutMs, int faultDelayMs, boolean faultDrop, String faultCorrupt, int faultPartialBytes) {
         this.port = port;
         this.arraySize = arraySize;
@@ -100,31 +95,9 @@ public class DeviceSimulator implements Runnable {
 
     public void stop() { running = false; }
 
-    static byte[] respond(byte[] request) { return respond(request, "NIBBLE_SWAP"); }
+    static byte[] respond(byte[] request) { return DeviceRule.respond(request, "NIBBLE_SWAP"); }
 
-    static byte[] respond(byte[] request, String rule) {
-        String u = rule.toUpperCase();
-        if (u.equals("NIBBLE_SWAP")) {
-            byte[] reply = new byte[request.length];
-            for (int i = 0; i < request.length; i++) reply[i] = NibbleSwapVerifier.swap(request[i]);
-            return reply;
-        }
-        if (u.equals("ECHO")) return request.clone();
-        if (u.startsWith("ADD:")) {
-            byte add = (byte) Integer.parseInt(rule.substring(4).trim(), 16);
-            byte[] reply = new byte[request.length];
-            for (int i = 0; i < request.length; i++) reply[i] = (byte) ((request[i] + add) & 0xFF);
-            return reply;
-        }
-        if (u.startsWith("XOR:")) {
-            byte xor = (byte) Integer.parseInt(rule.substring(4).trim(), 16);
-            byte[] reply = new byte[request.length];
-            for (int i = 0; i < request.length; i++) reply[i] = (byte) (request[i] ^ xor);
-            return reply;
-        }
-        if (u.startsWith("FIXED:")) return Template.parseHex(rule.substring(6).trim());
-        throw new IllegalArgumentException("Unknown device rule: " + rule);
-    }
+    static byte[] respond(byte[] request, String rule) { return DeviceRule.respond(request, rule); }
 
     public static void main(String[] args) throws Exception {
         if (args.length < 1 || args.length > 2) {

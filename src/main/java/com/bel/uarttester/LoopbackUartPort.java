@@ -40,14 +40,20 @@ public class LoopbackUartPort implements UartPort {
     public void write(byte[] bytes) {
         if (closed) throw new IllegalStateException("Port is closed");
         if (bytes == null) return;
-        for (byte b : bytes) {
+        long startNano = nanosPerByte > 0 ? System.nanoTime() : 0;
+        for (int i = 0; i < bytes.length; i++) {
             if (nanosPerByte > 0) {
-                long ms = nanosPerByte / 1_000_000L;
-                int ns = (int) (nanosPerByte % 1_000_000L);
-                try { Thread.sleep(ms, ns); }
-                catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+                long targetNano = startNano + (long) (i + 1) * nanosPerByte;
+                long delay = targetNano - System.nanoTime();
+                if (delay > 2_000_000L) {
+                    try { Thread.sleep(delay / 1_000_000L - 1); }
+                    catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+                }
+                while (System.nanoTime() < targetNano) {
+                    Thread.onSpinWait();
+                }
             }
-            outbox.offer(b & 0xFF);
+            outbox.offer(bytes[i] & 0xFF);
         }
     }
 

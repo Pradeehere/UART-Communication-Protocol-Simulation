@@ -84,4 +84,20 @@ class MainTest {
         assertTrue(logContent.contains("WARN"));
         assertTrue(logContent.contains("shorter than round-trip wire time"));
     }
+
+    @Test
+    void systemPropertyUarttesterOutDirectsLogsAndData() throws Exception {
+        String prev = System.getProperty("uarttester.out");
+        try {
+            System.setProperty("uarttester.out", tempDir.toString());
+            Path tpl = writeTemplate("sysprop.properties", "0A 1B 2C 3D", "A0 B1 C2 D3", "NIBBLE_SWAP", "NIBBLE_SWAP");
+            Template t = Template.load(tpl.toString());
+            assertTrue(Main.run(t, true));
+            assertTrue(Files.exists(Paths.get(TestLog.runLogPath(tempDir.toString()))));
+            assertTrue(Files.exists(tempDir.resolve("data").resolve("results.db")));
+        } finally {
+            if (prev != null) System.setProperty("uarttester.out", prev);
+            else System.clearProperty("uarttester.out");
+        }
+    }
 }

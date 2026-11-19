@@ -15,21 +15,22 @@ import java.sql.Statement;
  * Fields containing commas or quotes are properly escaped per RFC 4180.
  */
 public class CsvExporter {
-    private static final String HEADER = "id,timestamp,template,array_no,sent,received,expected,latency_ms,verdict";
+    private static final String HEADER = "id,run_id,timestamp,template,array_no,sent,received,expected,latency_ms,verdict,detail";
 
     public static int export(Path dbPath, Path csvPath) throws Exception {
         int count = 0;
         try (Connection c = DriverManager.getConnection("jdbc:sqlite:" + dbPath);
              Statement s = c.createStatement();
-             ResultSet rs = s.executeQuery("SELECT id, created_at, template, array_no, "
-                     + "sent, received, expected, COALESCE(latency_ms, 0) AS latency_ms, verdict "
-                     + "FROM results ORDER BY id ASC");
+             ResultSet rs = s.executeQuery("SELECT id, COALESCE(run_id, '') AS run_id, created_at, template, array_no, "
+                     + "sent, received, expected, COALESCE(latency_ms, 0) AS latency_ms, verdict, "
+                     + "COALESCE(detail, '') AS detail FROM results ORDER BY id ASC");
              BufferedWriter w = Files.newBufferedWriter(csvPath, StandardCharsets.UTF_8)) {
             w.write(HEADER);
             w.newLine();
             while (rs.next()) {
                 w.write(String.join(",",
                         String.valueOf(rs.getInt("id")),
+                        esc(rs.getString("run_id")),
                         esc(rs.getString("created_at")),
                         esc(rs.getString("template")),
                         String.valueOf(rs.getInt("array_no")),
@@ -37,7 +38,8 @@ public class CsvExporter {
                         esc(rs.getString("received")),
                         esc(rs.getString("expected")),
                         String.format("%.2f", rs.getDouble("latency_ms")),
-                        rs.getString("verdict")));
+                        rs.getString("verdict"),
+                        esc(rs.getString("detail"))));
                 w.newLine();
                 count++;
             }

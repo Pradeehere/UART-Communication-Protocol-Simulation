@@ -42,7 +42,7 @@ class ResultStoreAndExportTest {
 
         List<String> lines = Files.readAllLines(csv);
         assertEquals(3, lines.size()); // header + 2 rows
-        assertEquals("id,timestamp,template,array_no,sent,received,expected,latency_ms,verdict", lines.get(0));
+        assertEquals("id,run_id,timestamp,template,array_no,sent,received,expected,latency_ms,verdict,detail", lines.get(0));
 
         // Check comma escaping (wrapped in quotes)
         assertTrue(lines.get(1).contains("\"my,template\""));

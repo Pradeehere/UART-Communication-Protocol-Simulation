@@ -50,13 +50,15 @@ public class TestRunner {
 
                 byte[] receivedPayload = null;
                 String failReason = null;
-                if (rawReply.length != readWireSize) {
-                    failReason = "expected " + expectedHex;
+                if (rawReply.length == 0) {
+                    failReason = "timeout: no reply within " + t.timeoutMs + " ms";
+                } else if (rawReply.length != readWireSize) {
+                    failReason = "short reply: " + rawReply.length + " of " + readWireSize + " bytes";
                 } else {
                     try {
                         receivedPayload = codec.decode(rawReply);
                     } catch (FrameCodec.FrameException e) {
-                        failReason = e.getMessage();
+                        failReason = "bad frame: " + e.getMessage();
                     }
                 }
 
@@ -67,18 +69,20 @@ public class TestRunner {
                     } else {
                         pass = verifier.verify(arrayToSend, receivedPayload, expectedSlice);
                     }
-                    if (!pass) failReason = "expected " + expectedHex;
+                    if (!pass) failReason = diffDetail(receivedPayload, t.expectPattern, offset, t.arraySize);
                 }
                 if (!pass) allPassed = false;
 
                 String lat = String.format(Locale.US, "%.2f", latencyMs);
-                String verdict = pass ? "PASS (" + lat + " ms)" : "FAIL (" + failReason + ") (" + lat + " ms)";
+                String failString = "FAIL - " + failReason;
+                String verdict = pass ? "PASS (" + lat + " ms)" : failString + " (" + lat + " ms)";
+                String detail = pass ? "" : failString;
                 byte[] logBytes = receivedPayload != null ? receivedPayload : rawReply;
                 log.log("TESTER", "RESULT", logBytes, "Array " + arrayNo + ": " + verdict);
 
                 if (store != null) {
                     try {
-                        store.save(t.name, arrayNo, arrayToSend, logBytes, expectedHex, latencyMs, pass);
+                        store.save(t.name, arrayNo, arrayToSend, logBytes, expectedHex, latencyMs, pass, detail);
                     } catch (Exception e) {
                         log.log("TESTER", "ERROR", null, "Failed to persist array " + arrayNo + " result: " + e.getMessage());
                     }
@@ -88,6 +92,27 @@ public class TestRunner {
         }
         log.log("TESTER", "RESULT", null, allPassed ? "ALL ARRAYS PASSED" : "TEST FAILED");
         return allPassed;
+    }
+
+    static String diffDetail(byte[] received, int[] expectPattern, int offset, int len) {
+        int diffCount = 0, firstIdx = -1;
+        StringBuilder positions = new StringBuilder();
+        for (int i = 0; i < len; i++) {
+            if (expectPattern[offset + i] < 0) continue; // skip ?? wildcard
+            if ((received[i] & 0xFF) != expectPattern[offset + i]) {
+                if (firstIdx < 0) firstIdx = i;
+                if (diffCount < 5) {
+                    if (diffCount > 0) positions.append(", ");
+                    positions.append(String.format("byte %d: expected %02X, got %02X",
+                            i, expectPattern[offset + i], received[i] & 0xFF));
+                }
+                diffCount++;
+            }
+        }
+        if (diffCount == 0) return "content mismatch";
+        String msg = diffCount + " of " + len + " bytes differ; first at " + positions;
+        if (diffCount > 5) msg += " ...";
+        return msg;
     }
 
     public static Verifier verifierFor(String name) {

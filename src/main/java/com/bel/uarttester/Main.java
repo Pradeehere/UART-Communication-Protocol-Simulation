@@ -11,6 +11,7 @@ import java.nio.file.Paths;
  */
 public class Main {
     public static void main(String[] args) {
+        String outDir = System.getProperty("uarttester.out", ".");
         if (args.length < 1 || args.length > 3)
             usage();
 
@@ -27,7 +28,7 @@ public class Main {
             if (args.length < 2)
                 usage();
             Path csv = Paths.get(args[1]);
-            Path db = Paths.get(args.length == 3 ? args[2] : "data/results.db");
+            Path db = Paths.get(args.length == 3 ? args[2] : Paths.get(outDir, "data", "results.db").toString());
             try {
                 int n = ResultStore.exportCsv(db, csv);
                 System.out.println("Exported " + n + " rows to " + csv);
@@ -38,7 +39,7 @@ public class Main {
             }
         }
         if ("results".equalsIgnoreCase(args[0])) {
-            String db = args.length >= 2 ? args[1] : "data/results.db";
+            String db = args.length >= 2 ? args[1] : Paths.get(outDir, "data", "results.db").toString();
             try {
                 ResultStore.printLastResults(db, 20);
                 System.exit(0);
@@ -57,7 +58,7 @@ public class Main {
         Path target = Paths.get(args[0]);
         if (Files.isDirectory(target)) {
             try {
-                System.exit(BatchRunner.run(target, loopback, "."));
+                System.exit(BatchRunner.run(target, loopback, outDir));
             } catch (Exception e) {
                 System.err.println("Batch error: " + e.getMessage());
                 System.exit(2);
@@ -66,10 +67,10 @@ public class Main {
 
         try {
             Template t = Template.load(args[0]);
-            System.exit(run(t, loopback, ".") ? 0 : 1);
+            System.exit(run(t, loopback, outDir) ? 0 : 1);
         } catch (Exception e) {
             System.err.println("Error: " + e.getMessage());
-            try (TestLog errLog = new TestLog(TestLog.runLogPath("."))) {
+            try (TestLog errLog = new TestLog(TestLog.runLogPath(outDir))) {
                 errLog.log("TESTER", "ERROR", null, e.getMessage());
             } catch (Exception ignored) {
             }
@@ -83,7 +84,7 @@ public class Main {
     }
 
     public static boolean run(Template template, boolean loopback) throws Exception {
-        return run(template, loopback, ".");
+        return run(template, loopback, System.getProperty("uarttester.out", "."));
     }
 
     public static boolean run(Template t, boolean loopback, String baseDir) throws Exception {
@@ -96,7 +97,8 @@ public class Main {
             log.log("TESTER", "INFO", null, "Template loaded: " + t.name + " from " + t.source);
             if ((t.baudTiming || !loopback) && t.timeoutMs < t.roundTripWireTimeMs()) {
                 log.log("TESTER", "WARN", null, String.format(java.util.Locale.US,
-                        "timeoutMs (%d ms) is shorter than round-trip wire time (%.2f ms)", t.timeoutMs, t.roundTripWireTimeMs()));
+                        "timeoutMs (%d ms) is shorter than round-trip wire time (%.2f ms)", t.timeoutMs,
+                        t.roundTripWireTimeMs()));
             }
             DeviceSimulator sim = null;
             Thread simThread = null;
