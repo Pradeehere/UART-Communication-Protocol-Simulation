@@ -58,4 +58,20 @@ class BatchRunnerTest {
         int code = BatchRunner.run(emptyDir, true, tempDir.toString());
         assertEquals(2, code);
     }
+
+    @Test
+    void loadFailureLogsErrorToRunLog() throws Exception {
+        Path tplDir = tempDir.resolve("templates-bad");
+        Files.createDirectories(tplDir);
+        Files.writeString(tplDir.resolve("bad.properties"), "invalid properties content without required keys");
+
+        int code = BatchRunner.run(tplDir, true, tempDir.toString());
+        assertEquals(2, code);
+
+        Path runLog = java.nio.file.Paths.get(TestLog.runLogPath(tempDir.toString()));
+        org.junit.jupiter.api.Assertions.assertTrue(Files.exists(runLog));
+        String logContent = Files.readString(runLog);
+        org.junit.jupiter.api.Assertions.assertTrue(logContent.contains("ERROR"));
+        org.junit.jupiter.api.Assertions.assertTrue(logContent.contains("Error loading bad.properties"));
+    }
 }

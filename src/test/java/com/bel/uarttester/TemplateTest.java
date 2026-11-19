@@ -3,6 +3,7 @@ package com.bel.uarttester;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -88,5 +89,22 @@ class TemplateTest {
         Properties p = validProps();
         p.setProperty("verify", "NON_EXISTENT_VERIFIER");
         assertThrows(IllegalArgumentException.class, () -> new Template(p));
+    }
+
+    @Test
+    void rejectsArraySizeOver255WithFrameLength() {
+        Properties p = validProps();
+        p.setProperty("arraySize", "256");
+        p.setProperty("frameLength", "true");
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 256; i++) {
+            if (i > 0) sb.append(' ');
+            sb.append("0A");
+        }
+        p.setProperty("send", sb.toString());
+        p.setProperty("expect", sb.toString());
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> new Template(p));
+        assertTrue(ex.getMessage().contains("arraySize"));
+        assertTrue(ex.getMessage().contains("frameLength"));
     }
 }

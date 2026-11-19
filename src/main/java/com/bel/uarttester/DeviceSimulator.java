@@ -13,6 +13,7 @@ public class DeviceSimulator implements Runnable {
     private final TestLog log;
     private final String deviceRule;
     private final FrameCodec codec;
+    private final int timeoutMs;
     private final int faultDelayMs, faultPartialBytes;
     private final boolean faultDrop;
     private final String faultCorrupt;
@@ -23,20 +24,26 @@ public class DeviceSimulator implements Runnable {
     }
 
     public DeviceSimulator(UartPort port, int arraySize, TestLog log, String rule) {
-        this(port, arraySize, log, rule, new FrameCodec(), 0, false, "NONE", 0);
+        this(port, arraySize, log, rule, new FrameCodec(), 1000, 0, false, "NONE", 0);
     }
 
     public DeviceSimulator(UartPort port, Template t, TestLog log) {
-        this(port, t.arraySize, log, t.device, t.codec(), t.faultDelayMs, t.faultDrop, t.faultCorrupt, t.faultPartialBytes);
+        this(port, t.arraySize, log, t.device, t.codec(), t.timeoutMs, t.faultDelayMs, t.faultDrop, t.faultCorrupt, t.faultPartialBytes);
     }
 
     public DeviceSimulator(UartPort port, int arraySize, TestLog log, String rule, FrameCodec codec,
                            int faultDelayMs, boolean faultDrop, String faultCorrupt, int faultPartialBytes) {
+        this(port, arraySize, log, rule, codec, 1000, faultDelayMs, faultDrop, faultCorrupt, faultPartialBytes);
+    }
+
+    public DeviceSimulator(UartPort port, int arraySize, TestLog log, String rule, FrameCodec codec,
+                           int timeoutMs, int faultDelayMs, boolean faultDrop, String faultCorrupt, int faultPartialBytes) {
         this.port = port;
         this.arraySize = arraySize;
         this.log = log;
         this.deviceRule = rule != null ? rule : "NIBBLE_SWAP";
         this.codec = codec != null ? codec : new FrameCodec();
+        this.timeoutMs = timeoutMs > 0 ? timeoutMs : 1000;
         this.faultDelayMs = faultDelayMs;
         this.faultDrop = faultDrop;
         this.faultCorrupt = faultCorrupt;
@@ -47,7 +54,7 @@ public class DeviceSimulator implements Runnable {
     public void run() {
         int wireSize = codec.wireSize(arraySize);
         while (running) {
-            byte[] request = port.read(wireSize, 500);
+            byte[] request = port.read(wireSize, timeoutMs);
             if (request.length == 0) continue;
             if (request.length != wireSize) {
                 log.log("DEVICE", "WARN", request, "Incomplete frame discarded (" + request.length + "/" + wireSize + " bytes)");
@@ -128,7 +135,7 @@ public class DeviceSimulator implements Runnable {
         try (java.io.Reader r = Files.newBufferedReader(Paths.get(args[0]), StandardCharsets.UTF_8)) { p.load(r); }
         if (args.length == 2) p.setProperty("port", args[1]);
         Template t = new Template(p, args[0]);
-        try (TestLog log = new TestLog("logs/device.log")) {
+        try (TestLog log = new TestLog(TestLog.deviceLogPath("."))) {
             UartPort port = new SerialUartPort(t);
             System.out.println("Device simulator running on " + t.port + " (" + t.device + "). Press Ctrl+C to stop.");
             new DeviceSimulator(port, t, log).run();

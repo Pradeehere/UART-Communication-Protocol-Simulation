@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
@@ -15,6 +16,14 @@ import java.time.format.DateTimeFormatter;
 public class TestLog implements AutoCloseable {
     private static final DateTimeFormatter TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss.SSS");
     private final PrintWriter file;
+
+    public static String runLogPath(String baseDir) {
+        return Paths.get(baseDir, "logs", "run-" + LocalDate.now() + ".log").toString();
+    }
+
+    public static String deviceLogPath(String baseDir) {
+        return Paths.get(baseDir, "logs", "device-" + LocalDate.now() + ".log").toString();
+    }
 
     public TestLog(String path) throws IOException {
         if (Paths.get(path).getParent() != null) {
@@ -30,7 +39,7 @@ public class TestLog implements AutoCloseable {
     }
 
     public void log(String source, String event, byte[] bytes, String detail) {
-        String hex = Template.toHex(bytes);
+        String hex = Template.toHex(bytes, 32);
         String line = String.format("%s | %-6s | %-7s | %s",
                 LocalDateTime.now().format(TIME), source, event, hex);
         if (detail != null && !detail.trim().isEmpty()) {

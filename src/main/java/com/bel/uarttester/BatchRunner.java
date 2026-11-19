@@ -39,6 +39,10 @@ public class BatchRunner {
                 t = Template.load(file.toString());
             } catch (Exception e) {
                 System.err.println("Error loading " + file.getFileName() + ": " + e.getMessage());
+                try (TestLog errLog = new TestLog(TestLog.runLogPath(baseDir))) {
+                    errLog.log("TESTER", "ERROR", null, "Error loading " + file.getFileName() + ": " + e.getMessage());
+                } catch (Exception ignored) {
+                }
                 results.add(new Entry(file.getFileName().toString(), 0, "ERROR"));
                 errors++;
                 continue;

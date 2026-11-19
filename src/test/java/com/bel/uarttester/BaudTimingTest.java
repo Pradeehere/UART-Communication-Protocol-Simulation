@@ -60,4 +60,35 @@ class BaudTimingTest {
         Template t = Template.load(p.toString());
         assertTrue(Main.run(t, true, tempDir.toString()));
     }
+
+    @Test
+    void frameExceeding500msWithBaudTimingPasses() throws Exception {
+        // 128 bytes at 2400 baud: 10 bits/byte -> 1280 bits -> 0.533s wire transmission time.
+        // With DeviceSimulator using timeoutMs (3000ms), it now passes instead of discarding at 500ms.
+        Path p = tempDir.resolve("baud-128b.properties");
+        Properties props = new Properties();
+        props.setProperty("port", "COM5");
+        props.setProperty("baud", "2400");
+        props.setProperty("dataBits", "8");
+        props.setProperty("parity", "none");
+        props.setProperty("stopBits", "1");
+        props.setProperty("arraySize", "128");
+        props.setProperty("timeoutMs", "3000");
+        props.setProperty("baudTiming", "true");
+        props.setProperty("device", "ECHO");
+        props.setProperty("verify", "EXACT_MATCH");
+
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < 128; i++) {
+            if (i > 0) sb.append(' ');
+            sb.append(String.format("%02X", i % 256));
+        }
+        String hex = sb.toString();
+        props.setProperty("send", hex);
+        props.setProperty("expect", hex);
+        props.store(Files.newOutputStream(p), null);
+
+        Template t = Template.load(p.toString());
+        assertTrue(Main.run(t, true, tempDir.toString()));
+    }
 }

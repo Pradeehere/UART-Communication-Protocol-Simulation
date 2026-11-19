@@ -69,7 +69,7 @@ public class Main {
             System.exit(run(t, loopback, ".") ? 0 : 1);
         } catch (Exception e) {
             System.err.println("Error: " + e.getMessage());
-            try (TestLog errLog = new TestLog("logs/run.log")) {
+            try (TestLog errLog = new TestLog(TestLog.runLogPath("."))) {
                 errLog.log("TESTER", "ERROR", null, e.getMessage());
             } catch (Exception ignored) {
             }
@@ -87,13 +87,17 @@ public class Main {
     }
 
     public static boolean run(Template t, boolean loopback, String baseDir) throws Exception {
-        String logPath = Paths.get(baseDir, "logs", "run.log").toString();
-        String devLogPath = Paths.get(baseDir, "logs", "device.log").toString();
+        String logPath = TestLog.runLogPath(baseDir);
+        String devLogPath = TestLog.deviceLogPath(baseDir);
         String dbPath = Paths.get(baseDir, "data", "results.db").toString();
 
         try (TestLog log = new TestLog(logPath); ResultStore store = new ResultStore(dbPath)) {
             log.start(t.name);
             log.log("TESTER", "INFO", null, "Template loaded: " + t.name + " from " + t.source);
+            if ((t.baudTiming || !loopback) && t.timeoutMs < t.roundTripWireTimeMs()) {
+                log.log("TESTER", "WARN", null, String.format(java.util.Locale.US,
+                        "timeoutMs (%d ms) is shorter than round-trip wire time (%.2f ms)", t.timeoutMs, t.roundTripWireTimeMs()));
+            }
             DeviceSimulator sim = null;
             Thread simThread = null;
             TestLog deviceLog = null;

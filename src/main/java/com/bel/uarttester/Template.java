@@ -56,6 +56,10 @@ public class Template {
         this.frameStart = optHexByte(p, "frameStart");
         this.frameEnd = optHexByte(p, "frameEnd");
         this.frameLength = "true".equalsIgnoreCase(p.getProperty("frameLength", "false").trim());
+        if (frameLength && arraySize > 255)
+            throw new IllegalArgumentException(String.format(
+                    "Template \"%s\": key \"arraySize\" cannot exceed 255 when \"frameLength\" is true, got \"%d\"",
+                    source, arraySize));
         String cs = p.getProperty("checksum", "NONE").trim().toUpperCase();
         if (!CHECKSUMS.contains(cs)) throw err("checksum", "must be one of " + CHECKSUMS, cs);
         this.checksum = cs;
@@ -70,6 +74,13 @@ public class Template {
     }
 
     public FrameCodec codec() { return new FrameCodec(frameStart, frameLength, checksum, frameEnd); }
+
+    public double roundTripWireTimeMs() {
+        int wire = codec().wireSize(arraySize);
+        int parityBit = "none".equalsIgnoreCase(parity) ? 0 : 1;
+        int bitsPerByte = 1 + dataBits + parityBit + stopBits;
+        return 2.0 * wire * bitsPerByte * 1000.0 / baud;
+    }
 
     public byte[] expectBytes() {
         byte[] out = new byte[expectPattern.length];
@@ -113,12 +124,23 @@ public class Template {
         catch (IllegalArgumentException e) { throw err(key, "must be valid 1-2 digit hex bytes (00-FF)", s); }
     }
 
+    private static final char[] HEX = "0123456789ABCDEF".toCharArray();
+
     public static String toHex(byte[] bytes) {
+        return toHex(bytes, Integer.MAX_VALUE);
+    }
+
+    public static String toHex(byte[] bytes, int maxBytes) {
         if (bytes == null || bytes.length == 0) return "";
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < bytes.length; i++) {
+        int len = Math.min(bytes.length, maxBytes);
+        StringBuilder sb = new StringBuilder(len * 3 + 32);
+        for (int i = 0; i < len; i++) {
             if (i > 0) sb.append(' ');
-            sb.append(String.format("%02X", bytes[i]));
+            byte b = bytes[i];
+            sb.append(HEX[(b >>> 4) & 0xF]).append(HEX[b & 0xF]);
+        }
+        if (bytes.length > maxBytes) {
+            sb.append(" ... (").append(bytes.length).append(" bytes)");
         }
         return sb.toString();
     }
@@ -127,7 +149,11 @@ public class Template {
         StringBuilder sb = new StringBuilder();
         for (int i = off; i < off + len; i++) {
             if (i > off) sb.append(' ');
-            sb.append(pattern[i] < 0 ? "??" : String.format("%02X", pattern[i]));
+            if (pattern[i] < 0) sb.append("??");
+            else {
+                int b = pattern[i];
+                sb.append(HEX[(b >>> 4) & 0xF]).append(HEX[b & 0xF]);
+            }
         }
         return sb.toString();
     }
