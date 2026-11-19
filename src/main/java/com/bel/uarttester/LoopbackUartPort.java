@@ -26,7 +26,7 @@ public class LoopbackUartPort implements UartPort {
         BlockingQueue<Integer> q2 = new LinkedBlockingQueue<>();
         LoopbackUartPort a = new LoopbackUartPort(q1, q2);
         LoopbackUartPort b = new LoopbackUartPort(q2, q1);
-        return new LoopbackUartPort[]{a, b};
+        return new LoopbackUartPort[] { a, b };
     }
 
     public void setBaudRate(int baud, int dataBits, String parity, int stopBits) {
@@ -34,20 +34,28 @@ public class LoopbackUartPort implements UartPort {
         this.nanosPerByte = (long) ((bits * 1_000_000_000.0) / baud);
     }
 
-    public void setNanosPerByte(long nanos) { this.nanosPerByte = nanos; }
+    public void setNanosPerByte(long nanos) {
+        this.nanosPerByte = nanos;
+    }
 
     @Override
     public void write(byte[] bytes) {
-        if (closed) throw new IllegalStateException("Port is closed");
-        if (bytes == null) return;
+        if (closed)
+            throw new IllegalStateException("Port is closed");
+        if (bytes == null)
+            return;
         long startNano = nanosPerByte > 0 ? System.nanoTime() : 0;
         for (int i = 0; i < bytes.length; i++) {
             if (nanosPerByte > 0) {
                 long targetNano = startNano + (long) (i + 1) * nanosPerByte;
                 long delay = targetNano - System.nanoTime();
                 if (delay > 2_000_000L) {
-                    try { Thread.sleep(delay / 1_000_000L - 1); }
-                    catch (InterruptedException e) { Thread.currentThread().interrupt(); return; }
+                    try {
+                        Thread.sleep(delay / 1_000_000L - 1);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
                 }
                 while (System.nanoTime() < targetNano) {
                     Thread.onSpinWait();
@@ -59,17 +67,23 @@ public class LoopbackUartPort implements UartPort {
 
     @Override
     public byte[] read(int size, int timeoutMs) {
-        if (size <= 0) return new byte[0];
+        if (size <= 0)
+            return new byte[0];
         byte[] received = new byte[size];
         int count = 0;
         long deadline = System.currentTimeMillis() + timeoutMs;
         while (count < size && !closed) {
             long remaining = deadline - System.currentTimeMillis();
-            if (remaining <= 0) break;
+            if (remaining <= 0)
+                break;
             try {
                 Integer val = inbox.poll(remaining, TimeUnit.MILLISECONDS);
-                if (val == null) break;
-                if (val == -1) { inbox.offer(-1); break; }
+                if (val == null)
+                    break;
+                if (val == -1) {
+                    inbox.offer(-1);
+                    break;
+                }
                 received[count++] = (byte) val.intValue();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -87,5 +101,7 @@ public class LoopbackUartPort implements UartPort {
         }
     }
 
-    public boolean isClosed() { return closed; }
+    public boolean isClosed() {
+        return closed;
+    }
 }
